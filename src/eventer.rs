@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use postcard::accumulator::{CobsAccumulator, FeedResult};
 use serde::{de::DeserializeOwned, Serialize};
-use rusty_dialemma_shared::cmd::{CmdOrAck, Command};
+use rusty_dilemma_shared::cmd::{CmdOrAck, Command};
 use tokio::sync::{Mutex, mpsc};
 use futures::io::{AsyncReadExt, AsyncWriteExt};
 
