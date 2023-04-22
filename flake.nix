@@ -44,11 +44,14 @@
             CARGO_PROFILE = profile;
             src = craneLib.cleanCargoSource (craneLib.path path);
             doCheck = false;
+            nativeBuildInputs = [ pkgs.pkg-config ];
             buildInputs = [
+              pkgs.libiconv
               # Add additional build inputs here
+            ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+              pkgs.systemd
             ] ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [
               # Additional darwin specific inputs can be set here
-              pkgs.libiconv
               pkgs.darwin.apple_sdk.frameworks.IOKit
             ];
           };
