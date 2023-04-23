@@ -31,7 +31,11 @@ pub async fn logger(mut rx: broadcast::Receiver<DeviceToHost>) -> eyre::Result<(
     let mut s = String::new();
 
     loop {
-        let msg = rx.recv().await?;
+        let msg = match rx.recv().await {
+            Ok(msg) => msg,
+            Err(broadcast::error::RecvError::Closed) => return Ok(()),
+            Err(_) => continue,
+        };
 
         match msg {
             DeviceToHost::Log { from_side, msg } => match from_side {
@@ -39,7 +43,10 @@ pub async fn logger(mut rx: broadcast::Receiver<DeviceToHost>) -> eyre::Result<(
                     let _ =
                         left_rb_tx.write_str(std::str::from_utf8(&msg).unwrap_or("bad decode\r\n"));
                     if let Ok(_r) = left_rb_rx.read_line(&mut s) {
-                        info!("left: {}", s.trim_end_matches(|c| c == '\r' || c == '\n'));
+                        let s_ = s.trim_end_matches(|c| c == '\r' || c == '\n');
+                        if !s_.trim().is_empty() {
+                            info!("right: {}", s_);
+                        }
                         s.clear();
                     }
                 }
@@ -47,7 +54,10 @@ pub async fn logger(mut rx: broadcast::Receiver<DeviceToHost>) -> eyre::Result<(
                     let _ = right_rb_tx
                         .write_str(std::str::from_utf8(&msg).unwrap_or("bad decode\r\n"));
                     if let Ok(_r) = right_rb_rx.read_line(&mut s) {
-                        info!("right: {}", s.trim_end_matches(|c| c == '\r' || c == '\n'));
+                        let s_ = s.trim_end_matches(|c| c == '\r' || c == '\n');
+                        if !s_.trim().is_empty() {
+                            info!("right: {}", s_);
+                        }
                         s.clear();
                     }
                 }
