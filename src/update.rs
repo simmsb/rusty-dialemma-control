@@ -37,17 +37,17 @@ impl UpdateOpts {
             Side::Right => KeyboardSide::Right,
         };
 
-        cmds_in.send(reliable_msg(HostToDevice { target_side: side, msg: HostToDeviceMsg::FWCmd(FWCmd::Prepare) })).await?;
+        cmds_in.send(reliable_msg(HostToDevice { target_side: Some(side), msg: HostToDeviceMsg::FWCmd(FWCmd::Prepare) })).await?;
 
         let mut progress = 0;
         for chunk in fw.chunks(rusty_dilemma_shared::fw::FW_CHUNK_SIZE) {
             let cmd = FWCmd::WriteChunk { offset: progress, buf: heapless::Vec::from_slice(chunk).unwrap() };
             progress += chunk.len() as u32;
-            cmds_in.send(reliable_msg(HostToDevice { target_side: side, msg: HostToDeviceMsg::FWCmd(cmd) })).await?;
+            cmds_in.send(reliable_msg(HostToDevice { target_side: Some(side), msg: HostToDeviceMsg::FWCmd(cmd) })).await?;
             info!("Progress: {}/{}", progress, fw.len());
         }
         info!("Finished sending firmware, issuing reboot");
-        cmds_in.send(reliable_msg(HostToDevice { target_side: side, msg: HostToDeviceMsg::FWCmd(FWCmd::Commit) })).await?;
+        cmds_in.send(reliable_msg(HostToDevice { target_side: Some(side), msg: HostToDeviceMsg::FWCmd(FWCmd::Commit) })).await?;
         let _ = tokio::signal::ctrl_c().await;
 
         Ok(())

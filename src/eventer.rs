@@ -1,9 +1,9 @@
 use core::hash::Hash;
-use std::fmt::Debug;
 use postcard::accumulator::{CobsAccumulator, FeedResult};
 use rusty_dilemma_shared::cmd::{CmdOrAck, Command};
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::Duration;
 use std::u8;
@@ -45,14 +45,11 @@ pub struct Eventer<T> {
     tx: ByteWriter,
     rx: ByteReader,
     mix_chan: (mpsc::Sender<CmdOrAck<T>>, mpsc::Receiver<CmdOrAck<T>>),
-    waiters: Arc<Mutex<HashMap<u8, Event>>>,
 }
 
 struct EventSender<T> {
-    id_tx: async_channel::Sender<u8>,
-    id_rx: async_channel::Receiver<u8>,
     mix_chan: mpsc::Sender<CmdOrAck<T>>,
-    waiters: Arc<Mutex<HashMap<u8, Event>>>,
+    ack_chan: mpsc::Receiver<()>,
 }
 
 struct EventOutProcessor<T> {
@@ -61,11 +58,10 @@ struct EventOutProcessor<T> {
 }
 
 struct EventInProcessor<T, U: Clone> {
-    id_tx: async_channel::Sender<u8>,
     rx: ByteReader,
     out_chan: broadcast::Sender<U>,
     mix_chan: mpsc::Sender<CmdOrAck<T>>,
-    waiters: Arc<Mutex<HashMap<u8, Event>>>,
+    ack_chan: mpsc::Sender<()>,
 }
 
 impl<T, U> EventInProcessor<T, U>
@@ -98,29 +94,17 @@ where
                         match data {
                             CmdOrAck::Cmd(c) => {
                                 if c.validate() {
-                                    if let Some(ack) = c.ack() {
-                                        info!("sending an ack: {:?}", ack);
-                                        let _ = self.mix_chan.send(CmdOrAck::Ack(ack)).await;
+                                    if c.reliable {
+                                        let _ = self.mix_chan.send(CmdOrAck::Ack).await;
                                     }
                                     self.out_chan.send(c.cmd).unwrap();
                                 } else {
                                     warn!("Corrupted parsed command: {:?}", c);
                                 }
                             }
-                            CmdOrAck::Ack(a) => match a.validate() {
-                                Ok(a) => {
-                                    if let Some(waker) = self.deregister_waiter(a.id).await {
-                                        debug!("received ack for: {}", a.id);
-                                        let _ = waker.send(());
-                                        self.id_tx.send(a.id).await.unwrap();
-                                    } else {
-                                        debug!("received ack but found no waiter: {}", a.id);
-                                    }
-                                }
-                                Err(e) => {
-                                    warn!("Corrupted parsed ack: {:?}", e);
-                                }
-                            },
+                            CmdOrAck::Ack => {
+                                self.ack_chan.send(()).await;
+                            }
                         }
 
                         remaining
@@ -134,10 +118,6 @@ where
         loop {
             let _ = self.recv_task_inner().await;
         }
-    }
-
-    async fn deregister_waiter(&self, id: u8) -> Option<Event> {
-        self.waiters.lock().await.remove(&id)
     }
 }
 
@@ -165,39 +145,20 @@ impl<T: Hash + Clone> EventSender<T> {
         let _ = self.mix_chan.send(CmdOrAck::Cmd(cmd)).await;
     }
 
-    async fn send_reliable(&self, cmd: T, timeout: Duration) {
+    async fn send_reliable(&mut self, cmd: T, mut timeout: Duration) {
         loop {
-            let id = self.id_rx.recv().await.unwrap();
-            let cmd = Command::new_reliable(cmd.clone(), id);
-            let waiter = self.register_waiter(id).await;
+            let cmd = Command::new_reliable(cmd.clone());
             let _ = self.mix_chan.send(CmdOrAck::Cmd(cmd)).await;
 
-            match tokio::time::timeout(timeout, waiter).await {
+            match tokio::time::timeout(timeout, self.ack_chan.recv()).await {
                 Ok(_) => {
                     return;
                 }
-                Err(_) => {
-                    debug!("Timed out after {:?}", timeout);
-                    self.deregister_waiter(id).await;
-                    self.id_tx.send(id).await.unwrap();
-                }
+                Err(_) => {}
             }
-        }
-    }
 
-    async fn register_waiter(&self, id: u8) -> tokio::sync::oneshot::Receiver<()> {
-        let (sender, receiver) = tokio::sync::oneshot::channel();
-        let mut waiters = self.waiters.lock().await;
-        if waiters.insert(id, sender).is_none() {
-            receiver
-        } else {
-            tracing::error!("Duped waiter id: {}", id);
-            panic!("Duped waiter id: {}", id);
+            timeout += Duration::from_micros(100);
         }
-    }
-
-    async fn deregister_waiter(&self, id: u8) -> Option<Event> {
-        self.waiters.lock().await.remove(&id)
     }
 }
 
@@ -211,18 +172,11 @@ pub async fn eventer<Sent, Received>(
     Received: Hash + Clone + DeserializeOwned + Debug,
 {
     let mix_chan = mpsc::channel(16);
-    let waiters = Arc::new(Mutex::new(HashMap::new()));
-    let (id_chan_tx, id_chan_rx) = async_channel::unbounded();
+    let ack_chan = mpsc::channel(16);
 
-    for x in 0..=u8::MAX {
-        id_chan_tx.send_blocking(x).unwrap();
-    }
-
-    let sender = EventSender {
-        id_tx: id_chan_tx.clone(),
-        id_rx: id_chan_rx,
+    let mut sender = EventSender {
         mix_chan: mix_chan.0.clone(),
-        waiters: Arc::clone(&waiters),
+        ack_chan: ack_chan.1,
     };
 
     let out_processor = EventOutProcessor {
@@ -231,11 +185,10 @@ pub async fn eventer<Sent, Received>(
     };
 
     let in_processor = EventInProcessor {
-        id_tx: id_chan_tx,
         rx,
         out_chan,
         mix_chan: mix_chan.0,
-        waiters,
+        ack_chan: ack_chan.0,
     };
 
     let sender_proc = async move {

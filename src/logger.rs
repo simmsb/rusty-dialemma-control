@@ -1,6 +1,6 @@
 use std::{fmt::Write, io::BufReader};
 
-use rusty_dilemma_shared::{device_to_host::DeviceToHost, side::KeyboardSide};
+use rusty_dilemma_shared::{device_to_host::{DeviceToHost, DeviceToHostMsg}, side::KeyboardSide};
 use std::io::BufRead;
 use tokio::sync::broadcast;
 use tracing::info;
@@ -37,15 +37,17 @@ pub async fn logger(mut rx: broadcast::Receiver<DeviceToHost>) -> eyre::Result<(
             Err(_) => continue,
         };
 
+        let DeviceToHost { from_side, msg } = msg;
+
         match msg {
-            DeviceToHost::Log { from_side, msg } => match from_side {
+            DeviceToHostMsg::Log { msg } => match from_side {
                 KeyboardSide::Left => {
                     let _ =
                         left_rb_tx.write_str(std::str::from_utf8(&msg).unwrap_or("bad decode\r\n"));
                     if let Ok(_r) = left_rb_rx.read_line(&mut s) {
                         let s_ = s.trim_end_matches(|c| c == '\r' || c == '\n');
                         if !s_.trim().is_empty() {
-                            info!("right: {}", s_);
+                            info!("left: {}", s_);
                         }
                         s.clear();
                     }

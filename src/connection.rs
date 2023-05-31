@@ -96,6 +96,7 @@ pub fn mixer(mut serial: tokio_serial::SerialStream) -> SerialMixer {
     tokio::spawn(async move {
         let _ = tokio::io::copy_bidirectional(&mut serial, &mut serial_side).await;
         info!("byte copy task closed");
+        std::process::exit(0);
     });
 
     SerialMixer {
@@ -112,7 +113,8 @@ pub fn connect() -> eyre::Result<(
         .into_iter()
         .inspect(|p| info!(port = ?p, "Found a serial port"))
         .filter(|p| match &p.port_type {
-            serialport::SerialPortType::UsbPort(usb) => (usb.vid, usb.pid) == (0xf000, 0xbaaa),
+            //serialport::SerialPortType::UsbPort(usb) => (usb.vid, usb.pid) == (0xf000, 0xbaaa),
+            serialport::SerialPortType::UsbPort(usb) => (usb.vid, usb.pid) == (0x2e8a, 0x000a),
             _ => false,
         })
         .next()
