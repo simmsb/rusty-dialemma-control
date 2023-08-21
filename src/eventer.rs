@@ -70,6 +70,7 @@ where
 {
     async fn recv_task_inner(&mut self) -> Option<()> {
         let mut accumulator = CobsAccumulator::<BUF_SIZE>::new();
+        let mut last_seen_id = None;
 
         loop {
             let mut buf = [0u8; 16];
@@ -94,14 +95,17 @@ where
                         match data {
                             CmdOrAck::Cmd(c) => {
                                 if c.validate() {
-                                    if c.reliable {
-                                        let _ = self.mix_chan.send(CmdOrAck::Ack).await;
+                                    // log::info!("Hi I got a command: {}", c);
+                                    if c.command_seq.reliable() {
+                                        self.mix_chan.send(CmdOrAck::Ack).await;
                                     }
-                                    self.out_chan.send(c.cmd).unwrap();
+                                    if Some(c.command_seq.id()) != last_seen_id {
+                                        let _ = self.out_chan.send(c.cmd);
+                                        last_seen_id = Some(c.command_seq.id());
+                                    }
                                 } else {
-                                    warn!("Corrupted parsed command: {:?}", c);
                                 }
-                            }
+                            },
                             CmdOrAck::Ack => {
                                 self.ack_chan.send(()).await;
                             }
@@ -140,14 +144,14 @@ where
 }
 
 impl<T: Hash + Clone> EventSender<T> {
-    async fn send_unreliable(&self, cmd: T) {
-        let cmd = Command::new_unreliable(cmd.clone());
+    async fn send_unreliable(&self, cmd: T, id: u8) {
+        let cmd = Command::new_unreliable(cmd.clone(), id);
         let _ = self.mix_chan.send(CmdOrAck::Cmd(cmd)).await;
     }
 
-    async fn send_reliable(&mut self, cmd: T, mut timeout: Duration) {
+    async fn send_reliable(&mut self, cmd: T, mut timeout: Duration, id: u8) {
         loop {
-            let cmd = Command::new_reliable(cmd.clone());
+            let cmd = Command::new_reliable(cmd.clone(), id);
             let _ = self.mix_chan.send(CmdOrAck::Cmd(cmd)).await;
 
             match tokio::time::timeout(timeout, self.ack_chan.recv()).await {
@@ -192,13 +196,16 @@ pub async fn eventer<Sent, Received>(
     };
 
     let sender_proc = async move {
+        let mut id: u8 = 0;
         loop {
             let Some(TransmittedMessage { msg, timeout }) = cmd_chan.recv().await else { break };
             if let Some(timeout) = timeout {
-                let _ = sender.send_reliable(msg, timeout).await;
+                let _ = sender.send_reliable(msg, timeout, id).await;
             } else {
-                let _ = sender.send_unreliable(msg).await;
+                let _ = sender.send_unreliable(msg, id).await;
             }
+            id += 1;
+            id &= 0b1111111;
         }
     };
 

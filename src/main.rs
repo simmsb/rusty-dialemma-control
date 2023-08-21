@@ -6,7 +6,6 @@ use color_eyre::eyre::Result;
 mod connection;
 mod eventer;
 mod logger;
-mod update;
 
 #[derive(Debug, clap::Parser)]
 struct Opts {
@@ -16,9 +15,6 @@ struct Opts {
 
 #[derive(Debug, clap::Subcommand)]
 pub enum ControlCommand {
-    /// Update the firmware
-    Update(crate::update::UpdateOpts),
-
     /// Listen to log messages
     Log(crate::logger::LogOpts),
 }
@@ -48,7 +44,6 @@ async fn main() -> Result<()> {
     install_tracing()?;
 
     match opts.command {
-        ControlCommand::Update(u) => u.execute().await?,
         ControlCommand::Log(l) => l.execute().await?,
     }
 
